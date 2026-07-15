@@ -77,8 +77,16 @@ def known_loanword_fix(token: str) -> str | None:
     """token이 국립국어원이 명시적으로 틀렸다고 표시한 외래어 표기(relate_mark_o에
     '(X)'로 표시)와 일치하면, 공식 정답(korean_mark)을 돌려준다.
     token 자체가 이미 맞는 표기이거나 kornorms에 없는 단어면 None을 돌려준다.
+
+    인명·지명(foreign_gubun이 '일반 용어'가 아닌 경우)은 절대 자동 반영하지
+    않는다. 같은 이름에 성경식 표기와 현대 인명 표기처럼 서로 다른 관례가
+    동시에 존재할 수 있고, 어느 쪽이 맞는지는 영상 속 실제 발음을 들어야만
+    판단할 수 있어 텍스트만으로는 확정할 수 없기 때문이다 — 이런 경우는
+    항상 사람 확인으로 넘긴다.
     """
     for item in search_kornorms(token):
+        if item.get("foreign_gubun") != "일반 용어":
+            continue
         correct = item.get("korean_mark")
         if correct and correct != token:
             return correct
