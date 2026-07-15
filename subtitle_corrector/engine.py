@@ -9,9 +9,12 @@
      성경식 표기와 현대 인명 표기처럼 서로 다른 관례가 동시에 존재할 수
      있고 실제 발음은 영상을 들어야만 확정할 수 있어, 반영은 하되 항상
      사람이 더블체크하도록 리포트에 플래그한다.
-2. 맞춤법 — 명사/동사/형용사 같은 내용어를 형태소 단위로 뽑아 사전 기본형
+2. 맞춤법 — 일반명사/동사/형용사 같은 내용어를 형태소 단위로 뽑아 사전 기본형
    (표제어)으로 복원한 뒤 표준국어대사전에 있는지 확인한다. 없으면 플래그만
    하고 자동 수정하지 않는다 (어떤 게 맞는 표기인지 알 수 없기 때문).
+   고유명사(NNP, 사람 이름 등)는 이 검사에서 제외한다 — 정상적인 이름도
+   사전 표제어가 아닌 경우가 대부분이라, 포함시키면 멀쩡한 이름을 전부
+   오탐하게 된다.
 3. 띄어쓰기 — kiwi.space()가 제안하는 띄어쓰기가 원문과 다르면 플래그한다.
    신뢰도를 알 수 없고 '한번/한 번'처럼 문맥에 따라 정답이 갈리는 경우가
    있어 절대 자동 적용하지 않는다.
@@ -26,14 +29,18 @@ from .dictionary import loanword_fix, word_exists
 from .parsers import SubtitleEntry
 from .report import FlagItem
 
-_CONTENT_TAGS = {"NNG", "NNP", "VV", "VA"}
+# NNP(고유명사)는 여기서 제외한다. 사람 이름 같은 고유명사는 표준국어대사전에
+# 등재돼 있지 않은 게 정상이라, 포함시키면 "지민", "민준" 같은 멀쩡한 이름을
+# 전부 "사전에 없는 단어"로 오탐하게 된다 (부산대 맞춤법 검사기가 사람 이름을
+# 이상하게 바꾼다는 지적과 같은 종류의 문제).
+_SPELLING_CHECK_TAGS = {"NNG", "VV", "VA"}
 _LOANWORD_TAGS = {"NNG", "NNP"}
 
 _kiwi = Kiwi()
 
 
 def _content_lemmas(text: str) -> list[str]:
-    return [t.lemma for t in _kiwi.tokenize(text) if t.tag in _CONTENT_TAGS]
+    return [t.lemma for t in _kiwi.tokenize(text) if t.tag in _SPELLING_CHECK_TAGS]
 
 
 def correct_loanwords(text: str) -> tuple[str, list[str], list[tuple[str, str]]]:
