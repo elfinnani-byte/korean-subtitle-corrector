@@ -81,26 +81,68 @@ def correct_loanwords(text: str) -> tuple[str, list[str], list[tuple[str, str]]]
     return corrected, list(reversed(applied)), list(reversed(needs_review_log))
 
 
+_COMPOUND_LEAD_TAGS = {"NNG", "NNP", "MM"}  # 명사/고유명사/관형사(예: '그때'의 '그')
+
+
+def _compound_candidate_spans(text: str) -> list[tuple[int, int, int]]:
+    """사전상 합성어일 가능성이 있는 인접 구간 후보를 찾는다 (아직 사전
+    확인 전 — 실제 합성어인지는 compound_status()로 따로 검증해야 한다).
+
+    두 가지 패턴을 본다:
+    1. (명사/고유명사/관형사) + (명사/고유명사) — 예: '노천'+'카페', '그'+'때'
+    2. 용언 어간+관형사형 어미 + 명사 — 예: '쓴'(쓰-+-ᆫ) + '맛' = '쓴맛'
+
+    반환값: (start, boundary, end) 리스트. boundary는 두 조각이 나뉘는
+    지점(공백을 넣거나 뺄 위치)이다. 두 토큰/세 토큰 사이의 간격이 빈
+    문자열이거나 공백 하나가 아니면(예: 조사가 끼어 있으면) 후보에서
+    제외한다 — 그렇지 않으면 '회전축에 목이'처럼 조사를 건너뛰고 엉뚱한
+    두 단어가 합쳐지는 사고가 생긴다.
+    """
+    tokens = _kiwi.tokenize(text)
+    spans = []
+
+    def gap_ok(end_pos: int, start_pos: int) -> bool:
+        return text[end_pos:start_pos] in ("", " ")
+
+    for t1, t2 in zip(tokens, tokens[1:]):
+        if t1.tag not in _COMPOUND_LEAD_TAGS or t2.tag not in ("NNG", "NNP"):
+            continue
+        boundary = t1.start + t1.len
+        if not gap_ok(boundary, t2.start):
+            continue
+        spans.append((t1.start, boundary, t2.start + t2.len))
+
+    for t1, t2, t3 in zip(tokens, tokens[1:], tokens[2:]):
+        if t1.tag not in ("VV", "VA") or t2.tag != "ETM" or t3.tag not in ("NNG", "NNP"):
+            continue
+        boundary = t2.start + t2.len
+        if not gap_ok(boundary, t3.start):
+            continue
+        spans.append((t1.start, boundary, t3.start + t3.len))
+
+    return spans
+
+
 def correct_compound_spacing(text: str) -> tuple[str, list[str]]:
-    """인접한 두 명사가 사전에 하나의 합성어(품사 있음, 하이픈 표기)로
-    등재되어 있는데 띄어 쓰여 있으면 붙여 쓰도록 자동 교정한다.
+    """사전에 하나의 합성어(품사 있음, 하이픈 표기)로 등재된 인접 구간이
+    띄어 쓰여 있으면 붙여 쓰도록 자동 교정한다 (예: '노천 카페' -> '노천카페',
+    '쓴 맛' -> '쓴맛', '그 때' -> '그때').
 
     사전이 "이 조합은 무조건 붙여 쓰는 하나의 단어"라고 직접 확인해 준
     경우만 반영한다. 명사구(품사 없음, 캐럿 표기)는 띄어쓰기·붙여쓰기 둘 다
     허용되므로 건드리지 않는다. kiwi.space()는 이런 합성어를 놓치는 경우가
-    있어(예: '노천 카페' -> 안 고침) 사전 조회로 보완한다.
+    있어 사전 조회로 보완한다.
 
     반환값: (수정된 텍스트, 적용된 수정 설명 목록: '원문 -> 정답')
     """
-    tokens = [t for t in _kiwi.tokenize(text) if t.tag == "NNG"]
     fixes = []  # (start, end, replacement, description)
-    for t1, t2 in zip(tokens, tokens[1:]):
-        gap = t2.start - (t1.start + t1.len)
-        if gap <= 0:
+    for start, boundary, end in _compound_candidate_spans(text):
+        original = text[start:end]
+        combined = text[start:boundary] + text[boundary:end].lstrip(" ")
+        if original == combined:
             continue  # 이미 붙어 있음
-        combined = t1.form + t2.form
         if compound_status(combined) == "합성어":
-            fixes.append((t1.start, t2.start + t2.len, combined, f"{t1.form} {t2.form} -> {combined}"))
+            fixes.append((start, end, combined, f"{original} -> {combined}"))
 
     corrected = text
     applied = []
@@ -254,16 +296,18 @@ def check_spacing(index: int, text: str) -> FlagItem | None:
     문맥에 따라 정답이 갈리는 경우 잘못 우겨서 고치는 걸 막기 위함)."""
     suggested = _kiwi.space(text)
 
-    # kiwi는 사전에 등재된 합성어를 모르는 경우가 있어(예: '노천카페'), 이미
-    # correct_compound_spacing()이 사전 근거로 확정 붙여쓰기한 부분을 다시
-    # 갈라놓자고 제안할 수 있다. 확정된 합성어는 사전이 kiwi보다 권위 있는
-    # 근거이므로, kiwi의 제안에서 그 부분만 원상복구해 오탐을 막는다.
-    tokens = [t for t in _kiwi.tokenize(text) if t.tag == "NNG"]
-    for t1, t2 in zip(tokens, tokens[1:]):
-        if t2.start - (t1.start + t1.len) > 0:
+    # kiwi는 사전에 등재된 합성어를 모르는 경우가 있어(예: '노천카페', '그때',
+    # '쓴맛'), 이미 correct_compound_spacing()이 사전 근거로 확정 붙여쓰기한
+    # 부분을 다시 갈라놓자고 제안할 수 있다. 확정된 합성어는 사전이 kiwi보다
+    # 권위 있는 근거이므로, kiwi의 제안에서 그 부분만 원상복구해 오탐을 막는다.
+    for start, boundary, end in _compound_candidate_spans(text):
+        tail = text[boundary:end].lstrip(" ")
+        combined = text[start:boundary] + tail
+        if text[start:end] != combined:
             continue  # 이미 떨어져 있으면 합성어 자동 교정 대상이 아니었음
-        if compound_status(t1.form + t2.form) == "합성어":
-            suggested = suggested.replace(f"{t1.form} {t2.form}", t1.form + t2.form)
+        if compound_status(combined) == "합성어":
+            spaced = text[start:boundary] + " " + tail
+            suggested = _force_span(suggested, combined, spaced)
 
     suggested = _normalize_aux_verb_spacing(text, suggested)
 
