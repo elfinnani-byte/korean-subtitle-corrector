@@ -7,9 +7,9 @@ if sys.platform == "win32":
     sys.stdout.reconfigure(encoding="utf-8")
     sys.stderr.reconfigure(encoding="utf-8")
 
-from subtitle_corrector.engine import correct_entries
+from subtitle_corrector.engine import apply_report_fixes, correct_entries
 from subtitle_corrector.parsers import parse_srt, write_srt
-from subtitle_corrector.report import write_report
+from subtitle_corrector.report import read_report, write_report
 
 app = typer.Typer()
 
@@ -39,12 +39,20 @@ def correct(
 
 
 @app.command(name="apply-report")
-def apply_report(
+def apply_report_cmd(
     report_file: Path = typer.Argument(..., help="사용자가 수정값을 채운 리포트 파일"),
     target_file: Path = typer.Argument(..., help="반영할 자막 파일"),
+    output: Path = typer.Option(None, help="출력 파일 경로 (기본: target_file에 덮어씀)"),
 ):
-    """리포트에 채운 수정값을 자막 파일에 반영합니다. (다음 단계에서 구현 예정)"""
-    typer.echo("아직 구현 전입니다 — 다음 단계에서 작업할 예정이에요.")
+    """리포트에 사용자가 채운 수정값을 자막 파일에 반영합니다."""
+    entries = parse_srt(target_file)
+    rows = read_report(report_file)
+    updated_entries, applied_count = apply_report_fixes(rows, entries)
+
+    output = output or target_file
+    write_srt(updated_entries, output)
+
+    typer.echo(f"리포트 반영 {applied_count}건 -> {output}")
 
 
 if __name__ == "__main__":

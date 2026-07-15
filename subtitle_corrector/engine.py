@@ -141,3 +141,34 @@ def correct_entries(
         )
 
     return corrected_entries, flags, applied_log
+
+
+def apply_report_fixes(
+    report_rows: list[dict], entries: list[SubtitleEntry]
+) -> tuple[list[SubtitleEntry], int]:
+    """리포트에서 사용자가 직접 채운 수정값(suggested_fix)을 entries에 반영한다.
+
+    한 줄에 플래그가 여러 개 걸려 여러 행이 있을 수 있는데, 그중 사용자가
+    실제로 값을 채운 행만 순서대로 적용한다 (같은 줄에 값이 여러 번 채워져
+    있으면 리포트 파일에서 나중에 나오는 행이 최종 반영된다).
+
+    반환값: (반영된 entries, 실제로 반영된 건수)
+    """
+    by_index = {e.index: e for e in entries}
+    applied_count = 0
+
+    for row in report_rows:
+        fix = (row.get("suggested_fix") or "").strip()
+        if not fix:
+            continue
+        try:
+            line_index = int(row["line_index"])
+        except (KeyError, TypeError, ValueError):
+            continue
+        entry = by_index.get(line_index)
+        if entry is None:
+            continue
+        entry.text = fix
+        applied_count += 1
+
+    return entries, applied_count
