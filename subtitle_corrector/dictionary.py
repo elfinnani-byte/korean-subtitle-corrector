@@ -95,20 +95,37 @@ def loanword_fix(token: str) -> tuple[str | None, bool, str | None]:
     (None, False, None)을 돌려준다.
 
     반환값: (교정값 또는 None, 사람 확인 필요 여부, 참고용 전체 맥락 또는 None)
-    - 일반 용어: 확인 불필요 (조용히 자동 반영), 맥락 정보 없음
-    - 인명·지명: 원지음 표기 원칙에 따라 우선 자동 반영하되, 같은 이름에
-      성경식 표기와 현대 인명 표기처럼 서로 다른 관례가 동시에 존재할 수
-      있어 실제 발음은 영상을 들어야만 확정할 수 있다 — 그래서 항상
-      "확인 필요"로 표시하고, 사람이 리포트에서 바로 판단할 수 있도록
-      원어 표기 전체("srclang_mark -> korean_mark")를 맥락으로 함께 준다.
+
+    판단 기준은 "인명이냐 일반 용어냐"가 아니라 "**검색된 정답이 하나로
+    일치하느냐**"다:
+    - kornorms에 등재된 모든 일치 항목이 같은 교정값을 가리키면, 이미 국립
+      국어원이 확정한 단일 정답이라는 뜻이므로 확인 없이 자동 반영한다
+      (예: "스노우"는 인명 표기에서도 항상 "스노"가 맞다 — 이건 문맥에
+      따라 갈리는 게 아니라 그냥 확정된 표기 오류다).
+    - 서로 다른 교정값이 섞여 있으면(예: 성경식 "예레미야" vs 현대 인명
+      "제러마이아"처럼 같은 원어에 대해 등재된 관례 자체가 갈리는 경우),
+      텍스트만으로는 어느 쪽인지 판단할 수 없고 실제 영상 발음을 들어야
+      하므로 첫 번째 후보를 적용하되 항상 "확인 필요"로 표시한다.
     """
+    matches = []  # (segment, item)
     for item in search_kornorms(token):
         correct = item.get("korean_mark")
         if not correct:
             continue
         segment = _closest_segment(token, correct)
         if segment != token:
-            needs_review = item.get("foreign_gubun") != "일반 용어"
-            context = f"{item.get('srclang_mark')} -> {correct}" if needs_review else None
-            return segment, needs_review, context
-    return None, False, None
+            matches.append((segment, item))
+
+    if not matches:
+        return None, False, None
+
+    distinct_segments = {segment for segment, _ in matches}
+    if len(distinct_segments) == 1:
+        return matches[0][0], False, None
+
+    segment, item = matches[0]
+    context = (
+        f"{item.get('srclang_mark')} -> {item.get('korean_mark')} "
+        f"(그 외 {len(distinct_segments) - 1}개의 다른 표기가 등재되어 있음)"
+    )
+    return segment, True, context
