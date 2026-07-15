@@ -5,10 +5,12 @@
    틀렸다"고 확정하고 정답까지 준 경우 자동으로 교정한다.
    - 일반 용어(예: 초코렛 -> 초콜릿): 문맥과 무관하게 하나의 공식 정답만
      있으므로 조용히 자동 반영하고 플래그하지 않는다.
-   - 인명·지명: 원지음 표기 원칙에 따라 우선 자동 반영하지만, 같은 이름에
-     성경식 표기와 현대 인명 표기처럼 서로 다른 관례가 동시에 존재할 수
-     있고 실제 발음은 영상을 들어야만 확정할 수 있어, 반영은 하되 항상
-     사람이 더블체크하도록 리포트에 플래그한다.
+   - 고유명사(NNP: 인명·지명·작품 제목 등): kornorms 정답이 하나뿐이든
+     여러 관례가 공존하든 상관없이 텍스트에는 절대 자동 반영하지 않고
+     항상 확인 플래그로만 제안한다. 예를 들어 "스노우"가 인명(스노우 기자)
+     이면 표기 규칙대로 "스노"가 맞지만, 같은 표기가 영화 제목("스노우맨")
+     처럼 배급사가 정한 고유 표기일 수도 있다 — 텍스트만으로는 이 둘을
+     구분할 방법이 없으므로, 고유명사 표기는 자동화보다 안전을 우선한다.
 2. 맞춤법 — 일반명사/동사/형용사 같은 내용어를 형태소 단위로 뽑아 사전 기본형
    (표제어)으로 복원한 뒤 표준국어대사전에 있는지 확인한다. 없으면 플래그만
    하고 자동 수정하지 않는다 (어떤 게 맞는 표기인지 알 수 없기 때문).
@@ -45,15 +47,30 @@ def _content_lemmas(text: str) -> list[str]:
     return [t.lemma for t in _kiwi.tokenize(text) if t.tag in _SPELLING_CHECK_TAGS]
 
 
-def correct_loanwords(text: str) -> tuple[str, list[str], list[tuple[str, str]]]:
-    """kornorms가 확정한 외래어 표기 오류를 자동으로 고친다.
+def correct_loanwords(
+    text: str,
+) -> tuple[str, list[str], list[tuple[str, str]], list[tuple[str, str]]]:
+    """kornorms가 확정한 외래어 표기 오류를 고친다.
 
-    반환값: (수정된 텍스트, 확인 불필요 자동 교정 로그, 확인 필요 교정 목록)
+    NNG(일반 명사)는 kornorms 정답이 하나뿐이면 조용히 자동 반영하고, 서로
+    다른 관례가 공존하면 반영은 하되 확인 플래그를 남긴다 — 기존 방식 그대로.
+
+    NNP(고유명사)는 이 둘 중 어느 쪽이든 절대 텍스트에 자동 반영하지 않고
+    항상 확인 플래그로만 제안한다. "스노우"가 인명(스노우 기자)이면 표기
+    규칙대로 "스노"가 맞지만, 같은 표기가 영화 제목("스노우맨")처럼 배급사가
+    정한 고유 표기일 수도 있어 규칙을 강제하면 실제 고유명사를 훼손할 위험이
+    있다 — 텍스트만으로는 이 둘을 구분할 방법이 없으므로, 고유명사는 자동화
+    대신 항상 사람이 최종 판단하게 한다.
+
+    반환값: (수정된 텍스트, 확인 불필요 자동 교정 로그, 확인 필요 교정 목록,
+    고유명사 확인 제안 목록)
     확인 불필요 로그 항목은 '원문 -> 정답' 문자열이다.
     확인 필요 목록 항목은 ('원문 -> 정답', 전체 맥락) 튜플이다.
+    고유명사 확인 제안 목록 항목도 ('원문 -> 정답', 전체 맥락) 튜플이다 —
+    텍스트 자체는 바뀌지 않고 이 제안만 리포트에 남는다.
     """
     candidates = [t for t in _kiwi.tokenize(text) if t.tag in _LOANWORD_TAGS]
-    replacements = []  # (start, len, original, fix, needs_review, context)
+    replacements = []  # (start, len, original, fix, needs_review, context, is_proper_noun)
     for t in candidates:
         # 이미 표준국어대사전에 정식 등재된 단어는 애초에 외래어 오표기 후보가
         # 아니므로 건드리지 않는다. 그렇지 않으면 "집"처럼 흔한 고유어가
@@ -63,22 +80,31 @@ def correct_loanwords(text: str) -> tuple[str, list[str], list[tuple[str, str]]]
             continue
         fix, needs_review, context = loanword_fix(t.form)
         if fix:
-            replacements.append((t.start, t.len, t.form, fix, needs_review, context))
+            replacements.append((t.start, t.len, t.form, fix, needs_review, context, t.tag == "NNP"))
 
     corrected = text
     applied = []
     needs_review_log = []
-    for start, length, original, fix, needs_review, context in sorted(
+    proper_noun_suggestions = []
+    for start, length, original, fix, needs_review, context, is_proper_noun in sorted(
         replacements, key=lambda r: r[0], reverse=True
     ):
-        corrected = corrected[:start] + fix + corrected[start + length :]
         entry = f"{original} -> {fix}"
+        if is_proper_noun:
+            proper_noun_suggestions.append((entry, context))
+            continue
+        corrected = corrected[:start] + fix + corrected[start + length :]
         if needs_review:
             needs_review_log.append((entry, context))
         else:
             applied.append(entry)
 
-    return corrected, list(reversed(applied)), list(reversed(needs_review_log))
+    return (
+        corrected,
+        list(reversed(applied)),
+        list(reversed(needs_review_log)),
+        list(reversed(proper_noun_suggestions)),
+    )
 
 
 _COMPOUND_LEAD_TAGS = {"NNG", "NNP", "MM"}  # 명사/고유명사/관형사(예: '그때'의 '그')
@@ -352,7 +378,7 @@ def correct_entries(
     applied_log = []
 
     for e in entries:
-        corrected_text, applied_fixes, review_fixes = correct_loanwords(e.text)
+        corrected_text, applied_fixes, review_fixes, proper_noun_fixes = correct_loanwords(e.text)
         corrected_text, compound_fixes = correct_compound_spacing(corrected_text)
         corrected_text, always_wrong_fixes = correct_always_wrong(corrected_text)
         corrected_text, discriminatory_fixes = correct_discriminatory_terms(corrected_text)
@@ -374,6 +400,22 @@ def correct_entries(
                         f"인명/지명 표기 자동 적용됨 ({fix}, 참고: {context}) — "
                         "원지음 표기 원칙에 따른 추정치이므로 실제 발음 확인 필요"
                     ),
+                )
+            )
+
+        for fix, context in proper_noun_fixes:
+            original_token, _, replacement_token = fix.partition(" -> ")
+            flags.append(
+                FlagItem(
+                    line_index=e.index,
+                    original_text=corrected_text,
+                    reason=(
+                        f"고유명사 외래어 표기 확인 필요 ({fix}, 참고: {context or '국립국어원 확정 표기'}) — "
+                        "인명·지명은 표기 규칙을 따라야 하지만, 작품 제목처럼 고유하게 "
+                        "고정된 표기일 수 있어 자동 반영하지 않음. 실제 대상이 규칙을 "
+                        "따라야 하는 경우에만 반영할 것"
+                    ),
+                    suggested_fix=corrected_text.replace(original_token, replacement_token, 1),
                 )
             )
 
