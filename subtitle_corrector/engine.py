@@ -17,9 +17,15 @@
    고유명사(NNP, 사람 이름 등)는 이 검사에서 제외한다 — 정상적인 이름도
    사전 표제어가 아닌 경우가 대부분이라, 포함시키면 멀쩡한 이름을 전부
    오탐하게 된다.
-3. 띄어쓰기 — kiwi.space()가 제안하는 띄어쓰기가 원문과 다르면 플래그한다.
-   신뢰도를 알 수 없고 '한번/한 번'처럼 문맥에 따라 정답이 갈리는 경우가
-   있어 절대 자동 적용하지 않는다.
+3. 띄어쓰기 — 두 성격을 구분한다.
+   - 조사·어미·접미사를 앞말에 붙이는 것(제1항/제41항)은 문맥과 무관하게
+     항상 정답이 하나뿐이라 자동으로 정리한다(예: "오늘은날씨가좋네요" ->
+     "오늘은 날씨가 좋네요"). 이건 "단어 경계가 어디인지 애매한" 문제가
+     아니라 형태소 결합 규칙 자체가 예외 없이 고정되어 있어서다.
+   - 반면 내용어와 내용어가 바로 이어질 때(합성어/의존명사/보조용언처럼
+     하나로 합쳐질지 별개로 남을지)는 '한번/한 번'처럼 의미에 따라 정답이
+     갈릴 수 있어, 사전으로 확정되지 않는 한 절대 자동 적용하지 않고
+     플래그만 한다.
 
 주의: 이건 여전히 PRD 3단계 판단 엔진 중 1단계(사전/규범 근거)에 해당한다.
 온라인가나다 아카이브 검색(2단계)은 아직 없다.
@@ -40,11 +46,94 @@ _SPELLING_CHECK_TAGS = {"NNG", "VV", "VA"}
 _LOANWORD_TAGS = {"NNG", "NNP"}
 _CONFUSABLE_LOOKUP = {word: pair for pair in CONFUSABLE_PAIRS for word in pair}
 
+# 조사(J*)·어미(E*)·파생접미사(XS*)·서술격 조사 '이다'(VCP): 한글 맞춤법
+# 제41항에 따라 앞말에 무조건 붙여 쓰는 형태소. "이 태그가 다음 토큰이면
+# 앞말에 붙인다"는 방향은 예외가 없어 항상 안전하다.
+_ATTACH_TAGS = {
+    "JKS", "JKC", "JKG", "JKO", "JKB", "JKV", "JKQ", "JX", "JC",
+    "EP", "EF", "EC", "ETN", "ETM",
+    "XSN", "XSA", "XSV",
+    "VCP",
+}
+# 반대 방향("이 태그 다음에는 항상 공백")은 더 좁게 잡아야 한다. 예를 들어
+# ETM(관형사형 어미)은 항상 다음에 명사가 와야 하는 어미인데, 그 명사와
+# 합쳐서 하나의 합성어가 될 수도 있다(예: '쓴'+'맛' = '쓴맛', 이미
+# _compound_candidate_spans()가 사전으로 확정하는 영역). 그래서 여기서는
+# "무조건 공백"을 조사와 문장 단위를 끝내는 어미(EF·EC)·서술격 조사에만
+# 한정한다 — 이들 뒤에 오는 건 항상 완전히 새로운 어절이지, 앞 형태소와
+# 합쳐질 수 있는 후보가 아니다.
+_MANDATORY_BOUNDARY_TAGS = {
+    "JKS", "JKC", "JKG", "JKO", "JKB", "JKV", "JKQ", "JX", "JC",
+    "EF", "EC", "VCP",
+}
+# 문장부호/기호는 새 어절의 시작으로 보지 않는다 — 종결어미 뒤에 마침표가
+# 바로 붙는 "먹었다." 같은 경우까지 공백을 강제하면 안 되기 때문.
+_PUNCT_TAG_PREFIX = "S"
+# 보조용언(VX)과 의존명사(NNB)는 앞말과 붙여 쓸지 띄어 쓸지가 제47항/제42항의
+# 예외 규정(붙임 허용)에 따라 갈리는 영역이라, 여기서는 판단하지 않고
+# _normalize_aux_verb_spacing() 등 전용 로직에 맡긴다 — 예를 들어 '해보자'의
+# 어미(EC) 뒤에 오는 '보다'(VX)에 공백을 강제하면 '해 보자'가 되어, 붙여 써도
+# 맞는 형태('해보자')를 오히려 틀린 형태로 바꿔버리게 된다.
+_AMBIGUOUS_FOLLOW_TAGS = {"VX", "NNB"}
+
 _kiwi = Kiwi()
 
 
 def _content_lemmas(text: str) -> list[str]:
     return [t.lemma for t in _kiwi.tokenize(text) if t.tag in _SPELLING_CHECK_TAGS]
+
+
+def _mechanical_respace(text: str) -> str:
+    """조사·어미·접미사 결합 지점의 띄어쓰기만 정리한다 (한글 맞춤법
+    제41항: 조사는 앞말에 붙여 씀 + 어미/접미사는 애초에 앞 형태소와 분리해
+    쓸 수 없음). 이 지점의 정답은 문맥과 무관하게 항상 하나뿐이므로 안전하게
+    자동 적용할 수 있다.
+
+    내용어(명사·동사·형용사·관형사 등)끼리 바로 이어지는 지점은 건드리지
+    않고 원문 간격을 그대로 보존한다 — 이건 합성어로 붙일지 별개 단어로
+    남길지가 의미에 따라 갈리는 애매한 영역이라(예: '한번'/'한 번'),
+    사전 근거 없이 여기서 임의로 판단하면 안 되기 때문이다.
+
+    토큰 표면형을 이어붙여 문자열을 재구성하지 않는다 — '해'(하+어)처럼
+    두 형태소가 같은 음절 하나를 공유해 start 위치가 겹치는 경우(제47항
+    보조용언 관련 로직에서도 이미 확인된 kiwi의 특성), 각 토큰을 독립적으로
+    다시 이어붙이면 그 음절이 중복 출력된다. 대신 토큰 사이의 "간격"만
+    원문에서 찾아 필요할 때만 교체하는 방식으로 이 문제를 피한다.
+    """
+    tokens = _kiwi.tokenize(text)
+    edits = []  # (gap_start, gap_end, desired_gap)
+    for t1, t2 in zip(tokens, tokens[1:]):
+        gap_start = t1.start + t1.len
+        gap_end = t2.start
+        if gap_end < gap_start:
+            continue  # 겹치는 형태소(예: '해'=하+어) - 실제 간격이 없어 건드릴 수 없음
+        if t2.tag in _ATTACH_TAGS:
+            desired_gap = ""  # 조사/어미/접미사/서술격조사는 무조건 붙임
+        elif (
+            t1.tag in _MANDATORY_BOUNDARY_TAGS
+            and not t2.tag.startswith(_PUNCT_TAG_PREFIX)
+            and t2.tag not in _AMBIGUOUS_FOLLOW_TAGS
+        ):
+            desired_gap = " "  # 어절이 완결된 지점 -> 새 어절은 항상 띄어씀
+        else:
+            continue  # 애매한 지점(내용어·합성어 후보·보조용언·의존명사 등): 원문 간격 유지
+        if text[gap_start:gap_end] != desired_gap:
+            edits.append((gap_start, gap_end, desired_gap))
+
+    corrected = text
+    for gap_start, gap_end, desired_gap in sorted(edits, key=lambda e: e[0], reverse=True):
+        corrected = corrected[:gap_start] + desired_gap + corrected[gap_end:]
+    return corrected
+
+
+def correct_particle_spacing(text: str) -> tuple[str, list[str]]:
+    """조사·어미·접미사 결합 지점의 띄어쓰기 오류를 자동으로 정리한다.
+
+    반환값: (수정된 텍스트, 적용된 수정 설명 목록: '원문 -> 정답')
+    """
+    corrected = _mechanical_respace(text)
+    applied = [f"{text} -> {corrected}"] if corrected != text else []
+    return corrected, applied
 
 
 def correct_loanwords(
@@ -379,12 +468,17 @@ def correct_entries(
 
     for e in entries:
         corrected_text, applied_fixes, review_fixes, proper_noun_fixes = correct_loanwords(e.text)
+        corrected_text, particle_fixes = correct_particle_spacing(corrected_text)
         corrected_text, compound_fixes = correct_compound_spacing(corrected_text)
         corrected_text, always_wrong_fixes = correct_always_wrong(corrected_text)
         corrected_text, discriminatory_fixes = correct_discriminatory_terms(corrected_text)
         applied_log.extend(
             f"[{e.index}] {fix}"
-            for fix in applied_fixes + compound_fixes + always_wrong_fixes + discriminatory_fixes
+            for fix in applied_fixes
+            + particle_fixes
+            + compound_fixes
+            + always_wrong_fixes
+            + discriminatory_fixes
         )
 
         corrected_entries.append(
