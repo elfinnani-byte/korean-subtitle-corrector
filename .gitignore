@@ -2,3 +2,5 @@
 __pycache__/
 *.pyc
 .venv/
+examples/*_corrected.srt
+examples/*_report.csv
