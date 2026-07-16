@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>한국어 자막 교정</title>
+<style>
+  *{box-sizing:border-box}
+  body{font-family:system-ui,sans-serif;max-width:760px;margin:40px auto;padding:0 16px;color:#222;line-height:1.6}
+  h1{font-size:1.4em}
+  .drop{border:2px dashed #aaa;border-radius:10px;padding:24px;text-align:center;margin:16px 0}
+  input[type=file]{margin:8px 0}
+  button{background:#2d3436;color:#fff;border:none;padding:10px 20px;border-radius:8px;cursor:pointer;font-size:0.95em}
+  button:disabled{opacity:0.5;cursor:not-allowed}
+  #status{margin:10px 0;color:#666;font-size:0.9em}
+  #result{display:none;margin-top:24px}
+  #result.show{display:block}
+  pre{background:#f4f4f4;border-radius:8px;padding:14px;white-space:pre-wrap;font-size:0.85em;max-height:280px;overflow:auto}
+  table{width:100%;border-collapse:collapse;margin-top:10px;font-size:0.85em}
+  th,td{border-bottom:1px solid #ddd;text-align:left;padding:6px 8px;vertical-align:top}
+  .share{background:#eef6ff;border:1px solid #bcdfff;border-radius:8px;padding:12px;margin-top:16px;font-size:0.9em}
+  .share code{background:#fff;padding:2px 6px;border-radius:4px}
+</style>
+</head>
+<body>
+  <h1>🎬 한국어 자막 띄어쓰기·맞춤법 교정</h1>
+  <p style="color:#666">.srt 파일을 올리면 자동으로 교정하고, 결과를 저장합니다. 링크를 새로고침하거나 다른 기기에서 열어도 결과가 그대로 남아있습니다.</p>
+
+  <div class="drop">
+    <input type="file" id="fileInput" accept=".srt">
+    <br>
+    <button id="submitBtn">교정하기</button>
+  </div>
+  <div id="status"></div>
+
+  <div id="result">
+    <div class="share" id="shareBox"></div>
+    <h3>교정된 자막</h3>
+    <pre id="correctedSrt"></pre>
+    <h3>자동 교정 로그 (<span id="appliedCount">0</span>건)</h3>
+    <ul id="appliedList"></ul>
+    <h3>확인이 필요한 항목 (<span id="flagCount">0</span>건)</h3>
+    <table>
+      <thead><tr><th>줄</th><th>내용</th><th>이유</th><th>제안</th></tr></thead>
+      <tbody id="flagBody"></tbody>
+    </table>
+  </div>
+
+<script>
+const statusEl = document.getElementById('status');
+const resultEl = document.getElementById('result');
+const submitBtn = document.getElementById('submitBtn');
+
+function renderResult(data) {
+  resultEl.classList.add('show');
+  document.getElementById('correctedSrt').textContent = data.corrected_srt;
+
+  const appliedList = document.getElementById('appliedList');
+  appliedList.innerHTML = (data.applied_log || []).map(l => `<li>${escapeHtml(l)}</li>`).join('') || '<li style="color:#999">없음</li>';
+  document.getElementById('appliedCount').textContent = (data.applied_log || []).length;
+
+  const flagBody = document.getElementById('flagBody');
+  flagBody.innerHTML = (data.flags || []).map(f => `
+    <tr>
+      <td>${f.line_index}</td>
+      <td>${escapeHtml(f.original_text)}</td>
+      <td>${escapeHtml(f.reason)}</td>
+      <td>${escapeHtml(f.suggested_fix || '')}</td>
+    </tr>`).join('') || '<tr><td colspan="4" style="color:#999">없음</td></tr>';
+  document.getElementById('flagCount').textContent = (data.flags || []).length;
+
+  const shareUrl = `${location.origin}${location.pathname}?id=${data.id}`;
+  document.getElementById('shareBox').innerHTML =
+    `✅ 저장됨. 이 결과를 다시 보려면: <br><code>${shareUrl}</code>`;
+  history.replaceState(null, '', `?id=${data.id}`);
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+submitBtn.addEventListener('click', async () => {
+  const file = document.getElementById('fileInput').files[0];
+  if (!file) { statusEl.textContent = '.srt 파일을 먼저 선택하세요.'; return; }
+
+  submitBtn.disabled = true;
+  statusEl.textContent = '교정 중입니다... (사전 조회가 포함되어 몇 초 걸릴 수 있어요)';
+
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch('/api/correct', { method: 'POST', body: form });
+    if (!res.ok) throw new Error(`서버 오류 (${res.status})`);
+    const data = await res.json();
+    statusEl.textContent = '완료!';
+    renderResult(data);
+  } catch (err) {
+    statusEl.textContent = '오류: ' + err.message;
+  } finally {
+    submitBtn.disabled = false;
+  }
+});
+
+// 페이지 로드 시 ?id=가 있으면 저장된 결과를 다시 불러온다 (새로고침/다른 기기에서도 남는다는 증거)
+(async () => {
+  const id = new URLSearchParams(location.search).get('id');
+  if (!id) return;
+  statusEl.textContent = '저장된 결과를 불러오는 중...';
+  try {
+    const res = await fetch(`/api/reports/${id}`);
+    if (!res.ok) throw new Error('저장된 결과를 찾을 수 없습니다.');
+    const data = await res.json();
+    statusEl.textContent = `불러옴 (id: ${id})`;
+    renderResult(data);
+  } catch (err) {
+    statusEl.textContent = '오류: ' + err.message;
+  }
+})();
+</script>
+</body>
+</html>
