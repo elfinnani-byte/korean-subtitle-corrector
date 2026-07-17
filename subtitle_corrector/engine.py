@@ -264,6 +264,17 @@ def correct_loanwords(
 
 _COMPOUND_LEAD_TAGS = {"NNG", "NNP", "MM"}  # 명사/고유명사/관형사(예: '그때'의 '그')
 
+# 관형사(그/이/저/두/세 등)+명사 조합은 사전이 "합성어"로 확인해 줘도
+# 원문이 의도한 뜻과 무관한 우연의 동형이의어일 위험이 크다 — 관형사는
+# 거의 모든 명사 앞에 올 수 있어("두 강", "그 다리" 등) 이런 충돌이
+# 명사+명사보다 훨씬 흔하다(실제로 "두강"[杜康=술의 별칭], "그다리"["다리쇠"의
+# 방언]과 충돌하는 사고가 발견됨, §20). 그래서 관형사가 이끄는 조합은 이미
+# 검증된 소수의 고정 표현만 자동으로 붙이고, 그 외는 사전이 "합성어"라고
+# 확인해줘도 자동으로 붙이지 않는다(플래그만 — 사전 등재만으로는 뜻이
+# 원문 의도와 같은지 확인할 수 없기 때문). 새 사례를 검증하면 이 목록에
+# 추가한다.
+_MM_NOUN_COMPOUND_ALLOWLIST = {"그때", "그날", "이날", "그곳", "이곳", "저곳"}
+
 
 def _compound_candidate_spans(text: str) -> list[tuple[int, int, int]]:
     """사전상 합성어일 가능성이 있는 인접 구간 후보를 찾는다 (아직 사전
@@ -287,6 +298,8 @@ def _compound_candidate_spans(text: str) -> list[tuple[int, int, int]]:
 
     for t1, t2 in zip(tokens, tokens[1:]):
         if t1.tag not in _COMPOUND_LEAD_TAGS or t2.tag not in ("NNG", "NNP"):
+            continue
+        if t1.tag == "MM" and t1.lemma + t2.lemma not in _MM_NOUN_COMPOUND_ALLOWLIST:
             continue
         boundary = t1.start + t1.len
         if not gap_ok(boundary, t2.start):
@@ -755,6 +768,9 @@ def _protect_unfounded_joining(text: str, suggested: str) -> str:
             continue
         if text[before.start + before.len : after.start] != " ":
             continue
+        if before.form == "안" and after.lemma == "되다" and _andoeda_forces_split(tokens, after):
+            to_restore.append(insert_at)  # 금지 구성 확정 -> 사전 등재 여부와 무관하게 항상 띄어씀
+            continue
         before_part = before.lemma if before.tag.startswith("V") else before.form
         after_part = after.lemma if after.tag.startswith("V") else after.form
         if not word_exists(before_part + after_part):
@@ -788,6 +804,43 @@ def _token_containing(tokens, pos: int):
         if t.start < pos < t.start + t.len:
             return t
     return None
+
+
+# "안"(부정 부사)+"되다"는 뜻이 갈리는 두 가지 서로 다른 구성이다 —
+# "안되다"(형용사, 하나의 단어: 상황이 좋지 않다, 예: "공부가 안된다")와
+# "안 되다"(부정 부사 "안"+동사 "되다": 허용·가능하지 않다, 예: "~하면
+# 안 됩니다")는 사전 등재 여부만으로는 구분할 수 없다(§20 실사용 버그).
+# 다만 "-면"/"-거든"/"-아서는/-어서는" 같은 조건·전제 어미 바로 뒤에 오는
+# "안 되다"는 사실상 예외 없이 금지·불가 구성이므로, 이 경우만 확실한
+# 문법적 근거로 삼아 항상 띄어 쓰도록 강제한다. 그 외의 경우(예: "공부가
+# 안된다")는 이 신호가 없으므로 기존 사전 등재 판단(항상 붙임)을 그대로
+# 따른다 — 확신이 없는 나머지 경우까지 추정으로 판단하지 않는다.
+_CONDITIONAL_EC_FORMS = {"면", "거든", "다면", "라면"}
+
+
+def _token_index(tokens, target) -> int | None:
+    for i, t in enumerate(tokens):
+        if t is target:
+            return i
+    return None
+
+
+def _andoeda_forces_split(tokens, after) -> bool:
+    """after가 '되다'(그 직전이 부정 부사 '안')일 때, 그 앞 문맥이 조건·전제
+    어미로 끝나는 금지 구성인지 확인한다."""
+    idx = _token_index(tokens, after)
+    if idx is None or idx < 2:
+        return False
+    if tokens[idx - 1].form != "안" or tokens[idx - 1].tag != "MAG":
+        return False
+    marker = tokens[idx - 2]
+    marker_idx = idx - 2
+    if marker.tag == "JX" and marker_idx - 1 >= 0:
+        # "-어서는/-아서는"처럼 어미(EC) 뒤에 보조사(는/도)가 덧붙는 경우
+        marker = tokens[marker_idx - 1]
+    if marker.tag != "EC":
+        return False
+    return marker.form in _CONDITIONAL_EC_FORMS or marker.form.startswith(("어서", "아서"))
 
 
 # 전문 용어·고유명사 성격의 복합 표현(부대명, 편제 번호, 알파벳 약칭 등)에
@@ -845,6 +898,8 @@ def _protect_unfounded_respacing(text: str, suggested: str) -> str:
         if before.tag in _TERM_COMPOUND_TAGS and after.tag in _TERM_COMPOUND_TAGS:
             to_remove.append((j1, j2))
             continue
+        if before.form == "안" and after.lemma == "되다" and _andoeda_forces_split(tokens, after):
+            continue  # 금지 구성 확정 -> 이 공백 삽입은 정답이므로 되돌리지 않는다
         # 용언(동사/형용사) 토큰은 표면형이 어간뿐이라(예: '하다가'의 '하'),
         # 사전 기본형(lemma)으로 합쳐야 '한잔하다' 같은 등재된 복합동사를
         # 알아볼 수 있다. '한잔'+'하'로는 사전에 없지만 '한잔'+'하다'는 있음.

@@ -229,6 +229,49 @@ class TestCheckSpacingTermCompoundProtection:
         assert check_spacing(0, "아르덴 숲에 독일군 20만 명") is None
 
 
+class TestAndoedaContextDisambiguation:
+    """'안되다'(형용사, 상황이 좋지 않다)와 '안 되다'(부정 부사+동사,
+    허용·가능하지 않다)는 사전 등재 여부만으로 구분이 안 된다. '-면'/
+    '-어서는' 같은 조건·전제 어미 뒤에 오는 경우만 확실한 금지 구성으로
+    보고 항상 띄어 쓰게 하고, 그 외(예: '공부가 안된다')는 기존처럼
+    사전 등재 판단(항상 붙임)을 따른다."""
+
+    def test_conditional_marker_forces_split(self):
+        assert check_spacing(0, "그러면 안됩니다").suggested_fix == "그러면 안 됩니다"
+        assert (
+            check_spacing(0, "여기서 담배를 피우면 안됩니다").suggested_fix
+            == "여기서 담배를 피우면 안 됩니다"
+        )
+        assert check_spacing(0, "그렇게 해서는 안된다").suggested_fix == "그렇게 해서는 안 된다"
+
+    def test_no_marker_keeps_idiom_default(self):
+        assert check_spacing(0, "공부가 안된다") is None
+        assert check_spacing(0, "사업이 안돼") is None
+
+    def test_already_correct_forms_unflagged(self):
+        assert check_spacing(0, "그러면 안 됩니다") is None
+        assert check_spacing(0, "공부가 안 된다") is None
+
+
+class TestCompoundSpacingMMAllowlist:
+    """관형사(그/이/저/두/세 등)+명사 조합은 사전이 '합성어'로 확인해 줘도
+    원문 의도와 무관한 우연의 동형이의어일 위험이 크다("두 강"이 "두강"
+    [杜康=술의 별칭]과 충돌하는 식) — 검증된 소수의 고정 표현만 자동으로
+    붙이고 나머지는 사전 등재 여부와 무관하게 그대로 둔다."""
+
+    def test_numeral_determiner_plus_noun_not_joined(self):
+        assert correct_compound_spacing("두 강을 건넜다") == ("두 강을 건넜다", [])
+
+    def test_demonstrative_plus_unrelated_homograph_not_joined(self):
+        assert correct_compound_spacing("그 다리를 건넜다") == ("그 다리를 건넜다", [])
+
+    def test_allowlisted_demonstrative_compound_still_joined(self):
+        assert correct_compound_spacing("그 때 이야기를 했다") == (
+            "그때 이야기를 했다",
+            ["그 때 -> 그때"],
+        )
+
+
 class TestCheckSpellingProductiveDemonymCompound:
     """국가/지역명 + 군(軍)/인(人)/어(語) 같은 생산적 파생어는 그 정확한
     조합이 사전에 개별 등재되어 있지 않아도(미군/독일군은 있지만 영국군은
