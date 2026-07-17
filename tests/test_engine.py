@@ -315,6 +315,12 @@ class TestActionNounPlusBatdaSuffix:
     def test_action_noun_plus_batda_stays_joined(self):
         assert check_spacing(0, "그는 호출받았다") is None
         assert check_spacing(0, "그는 사랑받는다") is None
+
+    def test_passive_only_noun_plus_batda_stays_joined(self):
+        """"스트레스"는 동작성 명사가 아니지만("스트레스하다"는 없는 말),
+        피동 의미가 있으면 접사로 붙인다는 추가 규칙(교육자료 심화 문서)
+        에 따라 "스트레스받다"도 붙여 쓴다."""
+        assert check_spacing(0, "스트레스받는다") is None
         assert check_spacing(0, "상처받았다") is None
 
     def test_concrete_object_noun_plus_batda_unaffected(self):
