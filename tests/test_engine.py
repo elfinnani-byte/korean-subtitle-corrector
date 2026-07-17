@@ -16,6 +16,7 @@
 
 from subtitle_corrector.engine import (
     check_spacing,
+    check_spelling,
     correct_always_wrong,
     correct_aux_verb_spacing,
     correct_compound_spacing,
@@ -187,3 +188,41 @@ class TestCheckSpacingJoiningProtection:
     def test_haryeogo_hada_not_joined_with_other_verbs(self):
         assert check_spacing(0, "나는 가려고 합니다") is None
         assert check_spacing(0, "먹으려고 해요") is None
+
+    def test_jalhada_contracted_form_not_split(self):
+        """'잘해야'(잘하다+아야)를 '잘 해야'로 잘못 갈라놓던 버그 —
+        '해'가 '하'+'어'의 축약형이라 표면형 재구성 비교가 실패하던 것을
+        위치 기반 간격 확인으로 수정."""
+        assert check_spacing(0, "힘 조절을 잘해야 합니다") is None
+
+
+class TestCheckSpacingTermCompoundProtection:
+    """전문 용어·고유명사·편제 번호 성격의 복합 표현(한글 맞춤법 제49항/
+    제50항이 붙여쓰기를 허용하는 대상)을 kiwi가 사전에 없다는 이유만으로
+    갈라놓지 않도록 보호하는 회귀 테스트. 실제 다큐멘터리 자막(Hitler's
+    Last Stand)을 감수하다가 무더기로 발견됨."""
+
+    def test_military_unit_designation_not_split(self):
+        assert check_spacing(0, "제505공수보병연대원들이 엄폐 중입니다") is None
+        assert check_spacing(0, "제82공수사단장") is None
+        assert check_spacing(0, "제505공수보병연대 2대대") is None
+
+    def test_plain_occupation_compound_not_split(self):
+        assert check_spacing(0, "폭파병 제리 위드 하사가 신속하게 움직입니다") is None
+
+    def test_letter_designation_not_split(self):
+        assert check_spacing(0, "E중대") is None
+
+    def test_number_within_man_unit_not_split(self):
+        """한글 맞춤법 제44항: '만' 단위 이내의 숫자는 붙여 쓴다."""
+        assert check_spacing(0, "아르덴 숲에 독일군 20만 명") is None
+
+
+class TestCheckSpellingProductiveDemonymCompound:
+    """국가/지역명 + 군(軍)/인(人)/어(語) 같은 생산적 파생어는 그 정확한
+    조합이 사전에 개별 등재되어 있지 않아도(미군/독일군은 있지만 영국군은
+    없는 것처럼 사전 등재 자체가 들쭉날쭉함) 신조어·오탈자로 플래그하지
+    않는다."""
+
+    def test_country_plus_gun_not_flagged(self):
+        assert check_spelling(0, "미군과 영국군") is None

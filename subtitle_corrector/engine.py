@@ -554,12 +554,30 @@ def correct_aux_verb_spacing(text: str) -> tuple[str, list[str]]:
     return corrected, applied
 
 
+# 국가/지역명 뒤에 붙어 "그 나라의 -" 뜻을 만드는 생산적 접미사(한자어
+# 軍/人/語). 조합 자체가 사전에 개별 표제어로 없어도(예: "영국군"은 없지만
+# "미군"/"독일군"은 있음 — 사전 등재가 우연히 들쭉날쭉할 뿐, 국가명+이
+# 접미사 결합은 규칙적으로 항상 만들 수 있는 정상적인 표현이다), 접미사를
+# 뗀 나머지가 실제 사전 단어(주로 국가/지역명)면 신조어·오탈자가 아니라
+# 정상적인 파생어로 본다.
+_PRODUCTIVE_DEMONYM_SUFFIXES = ("군", "인", "어")
+
+
+def _is_productive_demonym_compound(word: str) -> bool:
+    for suffix in _PRODUCTIVE_DEMONYM_SUFFIXES:
+        if len(word) > len(suffix) and word.endswith(suffix) and word_exists(word[: -len(suffix)]):
+            return True
+    return False
+
+
 def check_spelling(index: int, text: str) -> FlagItem | None:
     """사전에 없는 단어는 신조어일 수도, 외국어 음차(이름·지명 등)일 수도
     있어 이 함수만으로는 구분할 수 없다 — 그래서 고치자고 제안하지 않고,
     번역가 교육자료가 권장하는 실제 검증 방법(국립국어원 용례, 발음기호
     사전, 한글라이즈)으로 직접 확인하라고 안내만 한다."""
-    unknown = [w for w in _content_lemmas(text) if not word_exists(w)]
+    unknown = [
+        w for w in _content_lemmas(text) if not word_exists(w) and not _is_productive_demonym_compound(w)
+    ]
     if unknown:
         return FlagItem(
             line_index=index,
@@ -720,9 +738,21 @@ def _token_containing(tokens, pos: int):
     return None
 
 
+# 전문 용어·고유명사 성격의 복합 표현(부대명, 편제 번호, 알파벳 약칭 등)에
+# 흔히 등장하는 태그들. 한글 맞춤법 제49항(고유 명사)·제50항(전문 용어)은
+# "단어별로 띄어 씀을 원칙으로 하되, 붙여 쓸 수 있다"고 명시적으로 허용한다
+# — 즉 이미 붙여 쓰여 있다면 그 자체가 허용된 표기이므로, 사전에 그 정확한
+# 조합이 개별 표제어로 없다는 이유만으로 갈라놓으면 안 된다. 제44항(수
+# 표기: 만 단위 이내는 붙여 씀)에 해당하는 숫자+수사(NR, 예: "20만"의 "만")
+# 조합도 같은 이유로 포함한다. 의존명사(NNB)는 제외한다 — 관형사형+의존명사
+# 붙임은 제42항에 따라 실제로 항상 띄어 써야 하는 별개의 규칙이라, 여기
+# 포함하면 정당한 오류까지 숨겨버리게 된다.
+_TERM_COMPOUND_TAGS = {"NNG", "NNP", "SN", "SL", "XPN", "NR"}
+
+
 def _protect_unfounded_respacing(text: str, suggested: str) -> str:
     """kiwi.space()가 사전에도 없고 어문 규정에도 근거가 없는 채로 공백을
-    새로 끼워 넣자고 제안하는 경우를 되돌린다. 네 가지를 막는다:
+    새로 끼워 넣자고 제안하는 경우를 되돌린다. 다섯 가지를 막는다:
 
     0. kiwi 자신의 tokenize()가 이미 하나의 형태소로 본 토큰 내부에 공백을
        넣는 것 — tokenize()와 space()가 서로 다른 모델이라 어긋난 경우고,
@@ -737,6 +767,10 @@ def _protect_unfounded_respacing(text: str, suggested: str) -> str:
     3. '/' 바로 뒤, 또는 '[이름/상황]' 형태의 자막 브래킷 표기 안 — 이건
        실제 문장이 아니라 관례적 메타 표기라 한글 맞춤법이 다루는 대상이
        아니다. "'/' 뒤에 띄어 쓴다"는 규정 자체가 존재하지 않는다.
+    4. 전문 용어·고유명사·편제 번호 성격의 토큰끼리(_TERM_COMPOUND_TAGS)
+       원래 붙어 있던 경우 (예: '제505공수보병연대원', '폭파병', 'E중대',
+       '2대대', '20만') — 제49항/제50항이 이미 붙여쓰기를 허용하므로,
+       사전에 그 정확한 조합이 없다는 것만으로는 갈라야 할 근거가 안 된다.
     """
     brackets = _bracket_spans(text)
     tokens = None
@@ -756,13 +790,22 @@ def _protect_unfounded_respacing(text: str, suggested: str) -> str:
         if before.tag == "NNP" or after.tag == "NNP":
             to_remove.append((j1, j2))
             continue
+        if before.tag in _TERM_COMPOUND_TAGS and after.tag in _TERM_COMPOUND_TAGS:
+            to_remove.append((j1, j2))
+            continue
         # 용언(동사/형용사) 토큰은 표면형이 어간뿐이라(예: '하다가'의 '하'),
         # 사전 기본형(lemma)으로 합쳐야 '한잔하다' 같은 등재된 복합동사를
         # 알아볼 수 있다. '한잔'+'하'로는 사전에 없지만 '한잔'+'하다'는 있음.
+        # 간격 확인은 표면형을 이어붙여 비교하지 않는다 — '잘해야'(잘+하다의
+        # 활용형 '해')처럼 어간과 어미가 받침/음절을 공유해 표면형과 실제
+        # 글자가 어긋나는 kiwi 특성(제41항 관련 로직에서도 이미 확인됨)
+        # 때문에, 표면형 재구성 비교는 이런 경우를 엉뚱하게 걸러내 버린다.
+        # 대신 두 토큰이 실제로 빈틈없이 맞닿아 있는지만 위치로 확인한다.
+        if before.start + before.len != after.start:
+            continue
         before_part = before.lemma if before.tag.startswith("V") else before.form
         after_part = after.lemma if after.tag.startswith("V") else after.form
-        joined = before_part + after_part
-        if text[before.start : after.start + after.len] == before.form + after.form and word_exists(joined):
+        if word_exists(before_part + after_part):
             to_remove.append((j1, j2))
 
     for j1, j2 in sorted(to_remove, key=lambda r: r[0], reverse=True):
